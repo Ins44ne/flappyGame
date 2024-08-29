@@ -1,8 +1,10 @@
 import { appWindow } from '@tauri-apps/api/window'
 import kaplay from 'kaplay'
-import { makeBackgr } from './utilites'
+import { makeBackgr, startGame } from './utilites'
 import { SCALE_FACTOR } from './consts'
 import { makeChar } from './char'
+import { saveSystem } from './save'
+import { scoreBox } from './scoreBox'
 
 const kontext = kaplay({
   width: 1280,
@@ -75,15 +77,105 @@ kontext.scene('start', async () => {
     kontext.anchor('center'),
   ])
 
-  const startGame = () => {
-    kontext.play('confirm')
-    kontext.go('main')
-  }
+  buttonPlay.onClick(() => startGame(kontext))
+  kontext.onKeyPress('space', () => startGame(kontext))
+  kontext.onGamepadButtonPress('south', () => startGame(kontext))
 
-  buttonPlay.onClick(startGame)
-  kontext.onKeyPress('space', startGame)
-  kontext.onGamepadButtonPress('south', startGame)
+  await saveSystem.load()
+  if (!saveSystem.data.maxScore) {
+    saveSystem.data.maxScore = 0
+    await saveSystem.save()
+  }
 })
 
-kontext.scene('main', async () => {})
+kontext.scene('main', async () => {
+  let score = 0
+
+  const colliders = await (await fetch('./collidersData.json')).json()
+  const collidersData = colliders.data
+
+  makeBackgr(kontext)
+  kontext.setGravity(2500)
+
+  const map = kontext.add([kontext.pos(0, -50), kontext.scale(SCALE_FACTOR)])
+
+  const clouds = map.add([
+    kontext.sprite('clouds'),
+    kontext.pos(),
+    {
+      speed: 5,
+    },
+  ])
+
+  clouds.onUpdate(() => {
+    clouds.move(clouds.speed, 0)
+    if (clouds.pos.x > 700) {
+      clouds.pos.x = -500
+    }
+  })
+
+  const platforms = map.add([
+    kontext.sprite('obstacles'),
+    kontext.pos(),
+    kontext.area(),
+    {
+      speed: 100,
+    },
+  ])
+
+  platforms.onUpdate(() => {
+    platforms.move(-platforms.speed, 0)
+    if (platforms.pos.x < -490) {
+      platforms.pos.x = 300
+      platforms.speed += 10
+    }
+  })
+
+  kontext.loop(1, () => {
+    score += 1
+  })
+
+  for (const collider of collidersData) {
+    platforms.add([
+      kontext.area({
+        shape: new kontext.Rect(
+          kontext.vec2(0),
+          collider.width,
+          collider.height
+        ),
+      }),
+      kontext.body({ isStatic: true }),
+      kontext.pos(collider.x, collider.y),
+      'obstacles',
+    ])
+  }
+
+  kontext.add([
+    kontext.rect(kontext.width(), 50),
+    kontext.pos(0, -100),
+    kontext.area(),
+    kontext.fixed(),
+    'obstacles',
+  ])
+
+  kontext.add([
+    kontext.rect(kontext.width(), 50),
+    kontext.pos(0, 1000),
+    kontext.area(),
+    kontext.fixed(),
+    'obstacles',
+  ])
+
+  const player = kontext.add(makeChar(kontext))
+  player.pos = kontext.vec2(600, 250)
+  player.setControlls()
+  player.onCollide('obstacles', async () => {
+    if (player.isDead) return
+    kontext.play('hurt')
+    platforms.speed = 0
+    player.disableControlls()
+    kontext.add(await scoreBox(kontext, kontext.center(), score))
+    player.isDead = true
+  })
+})
 kontext.go('start', async () => {})
